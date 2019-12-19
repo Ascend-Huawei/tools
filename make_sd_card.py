@@ -183,7 +183,7 @@ def check_sd(dev_name):
             unchanged_disk_list.append(disk_name)
     unchanged_disk = " ".join(unchanged_disk_list)
 
-    disk_size_str = disk[0].split(",")[1]
+    disk_size_str = disk[0].split(", ")[1]
     disk_size_str = disk_size_str.split()[0]
     disk_size = int(disk_size_str)
 
