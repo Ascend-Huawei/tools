@@ -39,6 +39,7 @@ import time
 import yaml
 import sys
 
+
 NETWORK_CARD_DEFAULT_IP="192.168.0.2"
 USB_CARD_DEFAULT_IP="192.168.1.2"
 
@@ -52,7 +53,7 @@ SD_CARD_MAKING_PATH = os.path.join(CURRENT_PATH, "sd_card_making")
 MIN_DISK_SIZE = 7 * 1024 * 1024 * 1024
 
 MAKING_SD_CARD_COMMAND = "bash {path}/make_ubuntu_sd.sh " + " {dev_name}" + \
-    " {pkg_path} {ubuntu_file_name} {ascend_developerkit_file_name}" + \
+    " {pkg_path} {ubuntu_file_name}" + \
     " " + NETWORK_CARD_DEFAULT_IP + " " + USB_CARD_DEFAULT_IP + \
     " > {log_path}/make_ubuntu_sd.log "
 
@@ -240,8 +241,46 @@ def parse_download_info(ascend_version):
 
     return True, ascend_developerkit_url, ascend_sd_making_url, ubuntu_url
 
+def check_minirc_run_package():
+    #check driver package
+    ret, paths = execute(
+        "find {path} -name \"Ascend310-driver-*.tar.gz\"".format(path=CURRENT_PATH))
+    if not ret:
+        print("[ERROR]Can not find driver run package in current path")
+        return False
+
+    if len(paths) > 1:
+        print("[ERROR]Too many driver packages, please delete redundant packages.")
+        return False 
+
+    #check aicpu_kernel package
+    ret, paths = execute(
+        "find {path} -name \"Ascend310-aicpu_kernels-*.tar.gz\"".format(path=CURRENT_PATH))
+    if not ret:
+        print("[ERROR]Can not find aicpu_kernels package in current path")
+        return False
+
+    if len(paths) > 1:
+        print("[ERROR]Too many aicpu_kernels packages, please delete redundant packages.")
+        return False  
+
+    #check acl package
+    ret, paths = execute(
+        "find {path} -name \"Ascend310-acllib-*.run\"".format(path=CURRENT_PATH))
+    if not ret:
+        print("[ERROR]Can not find acllib run package in current path")
+        return False
+
+    if len(paths) > 1:
+        print("[ERROR]Too many acllib run packages, please delete redundant packages.")
+        return False  
+  
 
 def process_local_installation(dev_name):
+    ret = check_minirc_run_package
+    if not ret:
+        return False
+        
     confirm_tips = "Please make sure you have installed dependency packages:" + \
         "\n\t apt-get install -y qemu-user-static binfmt-support gcc-aarch64-linux-gnu g++-aarch64-linux-gnu\n" + \
         "Please input Y: continue, other to install them:"
@@ -255,17 +294,17 @@ def process_local_installation(dev_name):
     execute("mkdir -p {path}_log".format(path=SD_CARD_MAKING_PATH))
     log_path = "{path}_log".format(path=SD_CARD_MAKING_PATH)
     ret, paths = execute(
-        "find {path} -name \"mini_developerkit*.rar\"".format(path=CURRENT_PATH))
+        "find {path} -name \"Ascend310-driver-*.tar\"".format(path=CURRENT_PATH))
     if not ret:
-        print("[ERROR] Can not fine mini eveloperkit package in current path")
+        print("[ERROR] Can not fine driver run package in current path")
         return False
 
     if len(paths) > 1:
         print(
-            "[ERROR] Too many mini developerkit packages, please delete redundant packages.")
+            "[ERROR] Too many mini driver run packages, please delete redundant packages.")
         return False
-    ascend_developerkit_path = paths[0]
-    ascend_developerkit_file_name = os.path.basename(ascend_developerkit_path)
+    ascend_driver_path = paths[0]
+    ascend_driver_file_name = os.path.basename(ascend_driver_path)
 
     ret, paths = execute(
         "find {path} -name \"make-ubuntu-sd.sh\"".format(path=CURRENT_PATH))
@@ -285,9 +324,12 @@ def process_local_installation(dev_name):
     ubuntu_file_name = os.path.basename(ubuntu_path)
 
     print("Step: Start to make SD Card. It need some time, please wait...")
+    
+    print("Command:")
+    print(MAKING_SD_CARD_COMMAND.format(path=CURRENT_PATH, dev_name=dev_name, pkg_path=CURRENT_PATH,
+                                                ubuntu_file_name=ubuntu_file_name, log_path=log_path))
     execute(MAKING_SD_CARD_COMMAND.format(path=CURRENT_PATH, dev_name=dev_name, pkg_path=CURRENT_PATH,
-                                                ubuntu_file_name=ubuntu_file_name,
-                                                ascend_developerkit_file_name=ascend_developerkit_file_name, log_path=log_path))
+                                                ubuntu_file_name=ubuntu_file_name, log_path=log_path))
     ret = execute("grep Success {log_path}/make_ubuntu_sd.result".format(log_path=log_path))
     if not ret[0]:
         print("[ERROR] Making SD Card failed, please check %s/make_ubuntu_sd.log for details!" % log_path)
@@ -370,6 +412,7 @@ def process_internet_installation(dev_name, ascend_version):
     if not ret[0]:
         print("[ERROR] Making SD Card failed, please check %s/make_ubuntu_sd.log for details!" % log_path)
         return False
+        
     return True
 
 
@@ -405,7 +448,6 @@ def main():
         exit(-1)
 
     ret = check_sd(dev_name)
-
     if not ret:
         exit(-1)
 

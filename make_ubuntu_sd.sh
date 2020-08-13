@@ -30,7 +30,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 #   =======================================================================
-
+set -x
 # ************************Variable*********************************************
 ScriptPath="$( cd "$(dirname "$0")" ; pwd -P )""/"
 DEV_NAME=$1
@@ -55,9 +55,14 @@ fi
 
 ISO_FILE_DIR=$2
 ISO_FILE=$3
-RUN_MINI=$4
-NETWORK_CARD_DEFAULT_IP=$5
-USB_CARD_DEFAULT_IP=$6
+
+DRIVER_PACKAGE=$(ls Ascend310-driver-*.tar.gz)
+AICPU_KERNELS_PACKAGE=$(ls Ascend310-aicpu_kernels-*.tar.gz)
+ACLLIB_PACKAGE=$(ls Ascend-acllib-*.run)
+
+NETWORK_CARD_DEFAULT_IP=$4
+USB_CARD_DEFAULT_IP=$5
+
 
 LogPath=${ScriptPath}"sd_card_making_log/"
 TMPDIR_SD_MOUNT=${LogPath}"sd_mount_dir"
@@ -108,7 +113,7 @@ function filesClean()
         umount ${TMPDIR_SD3_MOUNT}
     fi
     rm -rf ${TMPDIR_SD3_MOUNT}
-    rm -rf ${LogPath}mini_developerkit
+    rm -rf ${LogPath}driver
 }
 #end
 # ************************check ip****************************************
@@ -295,9 +300,10 @@ function configUbuntu()
     # 1. configure image sources
     mkdir -p ${LogPath}squashfs-root/cdtmp
     mount -o bind ${TMPDIR_DATE} ${LogPath}squashfs-root/cdtmp
+	
     echo "
 #!/bin/bash
-RUN_MINI=\$1
+DRIVER_PACKAGE=\$1
 username=\$2
 password=\$3
 root_pwd=\$4
@@ -305,13 +311,15 @@ root_pwd=\$4
 # 1. apt install deb
 mv /etc/apt/sources.list /etc/apt/sources.list.bak
 touch /etc/apt/sources.list
-echo \"deb file:/cdtmp xenial main restrict\" > /etc/apt/sources.list
+echo \"deb file:/cdtmp bionic main restricted\" > /etc/apt/sources.list
 
 locale-gen zh_CN.UTF-8 en_US.UTF-8 en_HK.UTF-8
 apt-get update
+echo \"make_sd_process: 5%\"
 apt-get install openssh-server -y
-apt-get install unzip -y
+apt-get install tar -y
 apt-get install vim -y
+echo \"make_sd_process: 10%\"
 apt-get install gcc -y
 apt-get install zlib -y
 apt-get install python2.7 -y
@@ -323,8 +331,11 @@ apt-get install sysstat -y
 apt-get install libelf1 -y
 apt-get install libpython2.7 -y
 apt-get install libnuma1 -y
+echo \"make_sd_process: 20%\"
 apt-get install dmidecode -y
 apt-get install rsync -y
+apt-get install net-tools -y
+echo \"make_sd_process: 25%\"
 
 mv /etc/apt/sources.list.bak /etc/apt/sources.list
 
@@ -339,21 +350,24 @@ echo '127.0.0.1        localhost' > /etc/hosts
 echo '127.0.1.1        davinci-mini' >> /etc/hosts
 
 # 4. config ip
-echo \"source /etc/network/interfaces.d/*
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet static
-address ${NETWORK_CARD_DEFAULT_IP}
-netmask 255.255.255.0
-gateway ${NETWORK_CARD_GATEWAY}
-
-auto usb0
-iface usb0 inet static
-address ${USB_CARD_DEFAULT_IP}
-netmask 255.255.255.0
-\" > /etc/network/interfaces
+echo \"
+network:
+  version: 2
+#  renderer: NetworkManager
+  renderer: networkd
+  ethernets:
+    eth0:
+      dhcp4: no 
+      addresses: [${NETWORK_CARD_DEFAULT_IP}/24] 
+      gateway4: ${NETWORK_CARD_GATEWAY}
+      nameservers:
+            addresses: [255.255.0.0]
+   
+    usb0:
+      dhcp4: no 
+      addresses: [${USB_CARD_DEFAULT_IP}/24] 
+      gateway4: ${NETWORK_CARD_GATEWAY}
+\" > /etc/netplan/01-netcfg.yaml
 
 # 5. auto-run minirc_cp.sh and minirc_sys_init.sh when start ubuntu
 echo \"#!/bin/sh -e
@@ -370,13 +384,23 @@ echo \"#!/bin/sh -e
 # By default this script does nothing.
 cd /var/
 
-/bin/bash /var/minirc_boot.sh /opt/mini/\${RUN_MINI}
+
+/bin/bash /var/minirc_boot.sh /opt/mini/${DRIVER_PACKAGE}
+
+/bin/bash /var/acllib_install.sh >/var/1.log
+
+/bin/bash /var/aicpu_kernels_install.sh >>/var/1.log
+
 
 exit 0
 \" > /etc/rc.local
 
+
+chmod 755 /etc/rc.local
 echo \"RuntimeMaxUse=50M\" >> /etc/systemd/journald.conf
 echo \"SystemMaxUse=50M\" >> /etc/systemd/journald.conf
+
+echo \"export LD_LIBRARY_PATH=/home/HwHiAiUser/Ascend/acllib/lib64\" >> /home/HwHiAiUser/.bashrc
 
 exit
 # end" > ${LogPath}squashfs-root/chroot_install.sh
@@ -385,7 +409,7 @@ exit
     # 2. add user and install software
     # execute in ./chroot_install.sh
 
-    chroot ${LogPath}squashfs-root /bin/bash -c "./chroot_install.sh ${RUN_MINI} ${USER_NAME} '"${USER_PWD}"' '"${ROOT_PWD}"'"
+    chroot ${LogPath}squashfs-root /bin/bash -c "./chroot_install.sh ${DRIVER_PACKAGE} ${USER_NAME} '"${USER_PWD}"' '"${ROOT_PWD}"'"
 
     if [[ $? -ne 0 ]];then
         echo "Failed: qemu is broken or the version of qemu is not compatible!"
@@ -400,6 +424,7 @@ exit
     rm ${LogPath}squashfs-root/chroot_install.sh
     return 0
 }
+
 # end
 
 # ************************Format SDcard*****************************************
@@ -454,6 +479,7 @@ n
      return 1;
     fi
 
+    echo "make_sd_process: 30%"
     checkSDCard
     if [ $? -ne 0 ];then
         return 1
@@ -465,6 +491,7 @@ n
      return 1;
     fi
 
+    echo "make_sd_process: 35%"
     checkSDCard
     if [ $? -ne 0 ];then
         return 1
@@ -475,6 +502,7 @@ n
      echo "Failed: Format SDcard3 failed!"
      return 1;
     fi
+    echo "make_sd_process: 45%"
     return 0
 }
 #end
@@ -482,58 +510,114 @@ n
 # ************************Copy files to SD**************************************
 # Description:  copy rar and root filesystem to SDcard
 # ******************************************************************************
-function copyFilesToSDcard()
+function preInstallDriver()
 {
-    # 1. copy third party file
-    mkdir -p ${LogPath}squashfs-root/opt/mini
+    echo "start pre install driver"
+	mkdir -p ${LogPath}squashfs-root/opt/mini
     chmod 755 ${LogPath}squashfs-root/opt/mini
-    unzip ${ISO_FILE_DIR}/${RUN_MINI} mini_developerkit/scripts/minirc_install_phase1.sh -d ${LogPath}
-    cp ${LogPath}mini_developerkit/scripts/minirc_install_phase1.sh ${LogPath}squashfs-root/opt/mini/
+	
+    # 1. copy third party file
+    tar zxf ${ISO_FILE_DIR}/${DRIVER_PACKAGE} -C ${LogPath} driver/scripts/minirc_install_phase1.sh 
+    cp ${LogPath}driver/scripts/minirc_install_phase1.sh ${LogPath}squashfs-root/opt/mini/
     if [[ $? -ne 0 ]];then
         echo "Failed: Copy minirc_install_phase1.sh to filesystem failed!"
         return 1
     fi
-    chmod +x ${LogPath}/mini_developerkit/scripts/minirc_install_phase1.sh
+    chmod +x ${LogPath}/driver/scripts/minirc_install_phase1.sh
 
-    unzip ${ISO_FILE_DIR}/${RUN_MINI} mini_developerkit/scripts/minirc_boot.sh -d ${LogPath}
-    cp ${LogPath}mini_developerkit/scripts/minirc_boot.sh ${LogPath}squashfs-root/var/
+    echo "make_sd_process: 75%"
+
+    tar -zxf ${ISO_FILE_DIR}/${DRIVER_PACKAGE} -C ${LogPath} driver/scripts/minirc_boot.sh
+    cp ${LogPath}driver/scripts/minirc_boot.sh ${LogPath}squashfs-root/var/
     if [[ $? -ne 0 ]];then
         echo "Failed: Copy minirc_boot.sh to filesystem failed!"
         return 1
     fi
 
-    unzip ${ISO_FILE_DIR}/${RUN_MINI} mini_developerkit/extend_rootfs/perf -d ${LogPath}
-    cp ${LogPath}mini_developerkit/extend_rootfs/perf ${LogPath}squashfs-root/usr/bin/perf
+    tar -zxf ${ISO_FILE_DIR}/${DRIVER_PACKAGE} -C ${LogPath} driver/extend_rootfs/perf
+    cp ${LogPath}driver/extend_rootfs/perf ${LogPath}squashfs-root/usr/bin/perf
     if [[ $? -ne 0 ]];then
         echo "Failed: Copy perf.sh to filesystem failed!"
         return 1
     fi
     chmod +x ${LogPath}squashfs-root/usr/bin/perf
 
+    echo "make_sd_process: 80%"
     # 2. copy root filesystem
     if [[ ${arch} =~ "x86" ]];then
         rm ${LogPath}squashfs-root/usr/bin/qemu-aarch64-static
     fi
 
-    #install $RUN_MINI
+    #install $DRIVER_PACKAGE
     mkdir -p ${LogPath}mini_pkg_install/opt/mini
-    cp ${ISO_FILE_DIR}/${RUN_MINI}  ${LogPath}mini_pkg_install/opt/mini/
+    cp ${ISO_FILE_DIR}/${DRIVER_PACKAGE}  ${LogPath}mini_pkg_install/opt/mini/
     chmod +x ${LogPath}squashfs-root/opt/mini/minirc_install_phase1.sh
-    ${LogPath}mini_developerkit/scripts/minirc_install_phase1.sh ${LogPath}mini_pkg_install
+    ${LogPath}driver/scripts/minirc_install_phase1.sh ${LogPath}mini_pkg_install
     res=$(echo $?)
     if [[ ${res} != "0" ]];then
-        echo "Install ${RUN_MINI} fail, error code:${res}"
-        echo "Failed: Install ${RUN_MINI} failed!"
+        echo "Install ${DRIVER_PACKAGE} fail, error code:${res}"
+        echo "Failed: Install ${DRIVER_PACKAGE} failed!"
         return 1
     fi
-    rm -rf ${LogPath}mini_pkg_install/opt
-    cp -rf ${LogPath}mini_pkg_install/* ${LogPath}squashfs-root/
-    if [[ $? -ne 0 ]];then
-        echo "Failed: Copy mini_pkg_install to filesystem failed!"
-        return 1
-    fi
+    
+}
 
-    rm -rf ${LogPath}mini_pkg_install
+
+function generateAclLibInstallShell()
+{
+echo "
+#!/bin/bash
+
+chown HwHiAiUser:HwHiAiUser /home/HwHiAiUser/${ACLLIB_PACKAGE}
+echo \"y
+y
+\" | su HwHiAiUser -c \"/home/HwHiAiUser/${ACLLIB_PACKAGE} --run\"
+rm -f /home/HwHiAiUser/${ACLLIB_PACKAGE}
+exit 0
+" >${LogPath}squashfs-root/var/acllib_install.sh
+
+chmod 750 ${LogPath}squashfs-root/var/acllib_install.sh
+}
+
+
+function installAclLib()
+{
+    echo "start install acl lib"
+	
+    cp -f ${ISO_FILE_DIR}/$ACLLIB_PACKAGE ${LogPath}squashfs-root/home/HwHiAiUser/
+    chmod 750 ${LogPath}squashfs-root/home/HwHiAiUser/$ACLLIB_PACKAGE
+	
+	generateAclLibInstallShell
+	
+	echo "install acl lib end"	
+}
+
+function genAicpuKernInstShell()
+{
+	echo "
+#!/bin/bash
+
+cd /home/HwHiAiUser/aicpu_kernels_device/
+chmod 750 *.sh
+chmod 750 scripts/*.sh
+scripts/install.sh --run
+
+rm -rf /home/HwHiAiUser/aicpu_kernels_device
+
+exit 0
+" >${LogPath}squashfs-root/var/aicpu_kernels_install.sh
+
+    chmod 750 ${LogPath}squashfs-root/var/aicpu_kernels_install.sh
+}
+
+function installAicpuKernels()
+{
+    tar zxf ${ISO_FILE_DIR}/${AICPU_KERNELS_PACKAGE} -C ${LogPath}squashfs-root/home/HwHiAiUser/
+    genAicpuKernInstShell
+}
+
+function copyFilesToSDcard()
+{
     cp -a ${LogPath}squashfs-root/* ${TMPDIR_SD_MOUNT}
     if [[ $? -ne 0 ]];then
         echo "Failed: Copy root filesystem to SDcard failed!"
@@ -545,7 +629,49 @@ function copyFilesToSDcard()
 
     cp -rf ${TMPDIR_SD_MOUNT}/var/log/* ${TMPDIR_SD2_MOUNT}/
     #rm -rf ${TMPDIR_SD_MOUNT}/var/log/*
+    echo "make_sd_process: 90%"
     return 0
+}
+
+function preInstallMinircPackage()
+{
+    preInstallDriver
+	if [ $? -ne 0 ];then
+	    echo "Pre install driver package failed"
+        return 1
+    fi
+    echo "pre install driver end"
+	
+	installAclLib
+	if [ $? -ne 0 ];then
+	    echo "Pre install acllib package failed"
+        return 1
+    fi
+ echo "pre install acl lib end"
+	
+	installAicpuKernels
+	if [ $? -ne 0 ];then
+	    echo "Pre install aicpu_kernels package failed"
+        return 1
+    fi
+
+echo "pre install aicpu  end"
+	
+	rm -rf ${LogPath}mini_pkg_install/opt
+    cp -rf ${LogPath}mini_pkg_install/* ${LogPath}squashfs-root/
+    if [[ $? -ne 0 ]];then
+        echo "Failed: Copy mini_pkg_install to filesystem failed!"
+        return 1
+    fi
+    echo "pre install drvier finished"
+    echo "make_sd_process: 85%"
+    rm -rf ${LogPath}mini_pkg_install
+	
+	copyFilesToSDcard
+	if [ $? -ne 0 ];then
+	    echo "Copy file to sdcard failed"
+        return 1
+    fi
 }
 # end
 
@@ -554,6 +680,7 @@ function copyFilesToSDcard()
 # ******************************************************************************
 function make_sysroot()
 {
+    echo "make sysroot start"
     if [ ! -d /usr/aarch64-linux-gnu/ ]; then
         mkdir -p /usr/aarch64-linux-gnu/
     fi
@@ -561,7 +688,9 @@ function make_sysroot()
         mkdir -p /usr/lib/aarch64-linux-gnu/
     fi
     cp -rdp ${LogPath}squashfs-root/usr/include /usr/aarch64-linux-gnu/
+    echo "make_sd_process: 95%"
     cp -rdp ${LogPath}squashfs-root/usr/lib/aarch64-linux-gnu/* /usr/lib/aarch64-linux-gnu/
+    echo "make_sd_process: 98%"
     cp -rdp ${LogPath}squashfs-root/lib/aarch64-linux-gnu /lib/
     if [ ! -f /usr/lib/aarch64-linux-gnu/libz.so ]; then
         ln -s /lib/aarch64-linux-gnu/libz.so.1 /usr/lib/aarch64-linux-gnu/libz.so
@@ -569,12 +698,14 @@ function make_sysroot()
     ln -s /usr/aarch64-linux-gnu/include/sys /usr/include/sys
     ln -s /usr/aarch64-linux-gnu/include/bits /usr/include/bits
     ln -s /usr/aarch64-linux-gnu/include/gnu /usr/include/gnu
+    echo "make sysroot end"
 }
 
 # ########################Begin Executing######################################
 # ************************Check args*******************************************
 function main()
 {
+    echo "make_sd_process: 2%"
     if [[ $# -lt 4 ]];then
         echo "Failed: Number of parameter illegal! Usage: $0 <dev fullname> <img path> <iso fullname> <mini filename>"
         return 1;
@@ -625,7 +756,6 @@ function main()
     if [ $? -ne 0 ];then
         return 1
     fi
-    # end
 
     # ************************Copy files to SD**************************************
     if [[ -d "${TMPDIR_SD_MOUNT}" ]];then
@@ -641,6 +771,7 @@ function main()
     fi
     mkdir ${TMPDIR_SD2_MOUNT}
     mount ${DEV_NAME}$p2 ${TMPDIR_SD2_MOUNT} 2>/dev/null  # updated by aman
+    echo "make_sd_process: 50%"
 
     if [[ -d "${TMPDIR_SD3_MOUNT}" ]];then
         umount ${TMPDIR_SD3_MOUNT} 2>/dev/null
@@ -648,9 +779,10 @@ function main()
     fi
     mkdir ${TMPDIR_SD3_MOUNT}
     mount ${DEV_NAME}$p3 ${TMPDIR_SD3_MOUNT} 2>/dev/null  # updated by aman
-
-    echo "Process: 3/4(Copy filesystem and mini package to SDcard)"
-    copyFilesToSDcard
+    echo "make_sd_process: 55%"
+    
+    echo "Process: 3/4(Pre install each run package and copy filesystem to SDcard)"
+    preInstallMinircPackage
     if [ $? -ne 0 ];then
         return 1
     fi
@@ -663,9 +795,7 @@ function main()
         echo "Failed: Umount ${TMPDIR_SD_MOUNT} to SDcard failed!"
         return 1
     fi
-    
-    
-
+ 
     umount ${TMPDIR_SD2_MOUNT} 2>/dev/null
     if [[ $? -ne 0 ]];then
         echo "Failed: Umount ${TMPDIR_SD2_MOUNT} to SDcard failed!"
@@ -684,6 +814,7 @@ function main()
 main $*
 ret=$?
 #clean files
+echo "make sd car finished ,clean files" 
 filesClean
 
 if [[ ret -ne 0 ]];then
